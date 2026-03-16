@@ -7,6 +7,9 @@ from PIL import Image, ImageDraw, ImageFont
 import qrcode
 import uuid
 import pytesseract
+import csv
+import zipfile
+import io
 
 # ==========================================
 # ROI Configuration
@@ -176,35 +179,77 @@ def create_pdf(name, sub_id):
 
 @app.route('/api/process', methods=['POST'])
 def handle_request():
-    """主接口：处理前端发送的姓名、频道和作品照片"""
-    name = request.form.get('name', 'UNKNOWN').upper()
+    """主接口：处理前端发送的姓名(或CSV)、频道和作品照片"""
     channel = request.form.get('channel', 'Individual')
     file = request.files.get('artwork')
     
-    # 1. 保存上传文件
+    # ------------------
+    # 批量上传处理通道 (School + CSV)
+    # ------------------
+    if channel == "School" and file and file.filename.endswith('.csv'):
+        names = []
+        try:
+            # 读取 CSV 内容
+            stream = io.StringIO(file.stream.read().decode("UTF8"), newline=None)
+            csv_input = csv.reader(stream)
+            
+            for row in csv_input:
+                # 学校模板有很多行说明文字。真实数据行的特点是：第一列(BIL)是纯数字，第二列(NAMA)是名字。
+                if len(row) > 1:
+                    bil = row[0].strip()
+                    if bil.isdigit():
+                        student_name = row[1].strip()
+                        # 跳过模板里的例子 "NAMA MURID ANDA DALAM UPPERCASE"
+                        if student_name and "NAMA MURID ANDA" not in student_name:
+                            names.append(student_name)
+        except Exception as e:
+            return jsonify({"status": "fail", "message": f"CSV读取失败: {str(e)}"})
+
+        if not names:
+            return jsonify({"status": "fail", "message": "CSV文件为空或格式不正确"})
+
+        # 生成所有证书并打包为 ZIP
+        zip_filename = f"Batch_Certs_{uuid.uuid4().hex[:6]}.zip"
+        zip_path = os.path.join(PATHS["outputs"], zip_filename)
+        
+        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            for n in names:
+                u_id_hex = uuid.uuid4().hex
+                sub_id = f"YAA-{u_id_hex[:5].upper()}"
+                pdf_name = create_pdf(n, sub_id)
+                if pdf_name:
+                    pdf_full_path = os.path.join(PATHS["outputs"], pdf_name)
+                    zipf.write(pdf_full_path, arcname=pdf_name)
+                    
+        return jsonify({
+            "status": "success",
+            "score": 100,
+            "file": zip_filename, # 返回 ZIP 文件名供前端下载
+            "message": f"成功批量生成 {len(names)} 份证书"
+        })
+
+    # ------------------
+    # 单个上传处理通道 (Individual or Single School Pass)
+    # ------------------
+    name = request.form.get('name', 'UNKNOWN').upper()
     u_id_hex = uuid.uuid4().hex
     t_path = os.path.join(PATHS["inputs"], f"up_{u_id_hex[:6]}.jpg")
     if file: 
         file.save(t_path)
     
-    # 2. 执行审计
     passed, score, msg = False, 0, "等待处理"
     
     if channel == "Individual":
-        # 修正参数传递：run_ai_audit 定义的是 (image_path, name)
         passed, score, msg = run_ai_audit(t_path, name)
     else:
-        # 校方通道直接通过
         passed, score, msg = True, 100, "校方通道自动通过"
     
-    # 3. 生成 PDF
     pdf_filename = None
     if passed:
         u_id_hex = uuid.uuid4().hex
         sub_id = f"YAA-{u_id_hex[:5].upper()}"
         pdf_filename = create_pdf(name, sub_id)
     
-    # 4. 返回 JSON 数据 (对接前端 yaa_portal.html)
     return jsonify({
         "status": "success" if passed else "fail",
         "score": score,
