@@ -10,6 +10,7 @@ import pytesseract
 import csv
 import zipfile
 import io
+import threading
 
 # ==========================================
 # ROI Configuration
@@ -189,7 +190,8 @@ def create_pdf_batch(names, zip_path):
         max_width = base_img.size[0] * 0.75
         
         generated_files = []
-        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+        temp_zip = zip_path + ".tmp"
+        with zipfile.ZipFile(temp_zip, 'w', zipfile.ZIP_DEFLATED) as zipf:
             for name in names:
                 # 2. Work entirely in RAM
                 img = base_img.copy()
@@ -225,7 +227,9 @@ def create_pdf_batch(names, zip_path):
                 zipf.writestr(fname, pdf_bytes.getvalue())
                 
                 generated_files.append(fname)
-                
+        
+        # 生成完毕后重命名，防止前端过早下载到不完整的 ZIP
+        os.rename(temp_zip, zip_path)
         return True, len(generated_files)
     except Exception as e:
         print(f"Batch PDF Error: {e}")
@@ -262,21 +266,20 @@ def handle_request():
         if not names:
             return jsonify({"status": "fail", "message": "CSV文件为空或格式不正确"})
 
-        # 生成所有证书并打包为 ZIP (使用优化版批处理)
+        # 生成所有证书并打包为 ZIP (使用后台线程)
         zip_filename = f"Batch_Certs_{uuid.uuid4().hex[:6]}.zip"
         zip_path = os.path.join(PATHS["outputs"], zip_filename)
         
-        success, count = create_pdf_batch(names, zip_path)
+        # 启动后台线程执行批量生成, 避免前端 100秒超时断连!
+        thread = threading.Thread(target=create_pdf_batch, args=(names, zip_path), daemon=True)
+        thread.start()
         
-        if success:
-            return jsonify({
-                "status": "success",
-                "score": 100,
-                "file": zip_filename, # 返回 ZIP 文件名供前端下载
-                "message": f"成功批量生成 {count} 份证书"
-            })
-        else:
-            return jsonify({"status": "fail", "message": "批量生成证书时发生内部错误"})
+        return jsonify({
+            "status": "success",
+            "score": 100,
+            "file": zip_filename, # 返回 ZIP 文件名供前端下载
+            "message": f"正在后台为您火速生成 {len(names)} 份证书！\n请等待约 1-2 分钟后，再点击下方按钮下载。"
+        })
 
     # ------------------
     # 单个上传处理通道 (Individual or Single School Pass)
@@ -310,6 +313,9 @@ def handle_request():
 @app.route('/api/download/<filename>', methods=['GET'])
 def download_cert(filename):
     """供前端下载生成的证书 PDF"""
+    if not os.path.exists(os.path.join(PATHS["outputs"], filename)):
+        return "<h1>文件正在后台生成中...</h1><p>请耐心等待 1-2 分钟后刷新此页面重试！ (File is still generating, please wait and refresh later...)</p>", 404
+        
     return send_from_directory(PATHS["outputs"], filename, as_attachment=True)
 
 if __name__ == '__main__':
