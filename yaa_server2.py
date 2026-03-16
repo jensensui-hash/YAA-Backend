@@ -61,6 +61,9 @@ PATHS = {
 for p in PATHS.values():
     os.makedirs(p, exist_ok=True)
 
+# Global dict to store processing progress (in memory)
+BATCH_PROGRESS = {}
+
 # ==========================================
 # 2. 核心工具函数
 # ==========================================
@@ -180,9 +183,11 @@ def create_pdf(name, sub_id):
         print(f"PDF Error: {e}")
         return None
 
-def create_pdf_batch(names, zip_path):
+def create_pdf_batch(names, zip_path, zip_id):
     """Ultra-optimized RAM-based batch PDF generator to beat Render 100s timeout"""
     try:
+        BATCH_PROGRESS[zip_id] = {"current": 0, "total": len(names), "status": "processing"}
+        
         # 1. Pre-load Image and Font to memory ONCE
         base_img = Image.open(os.path.join(PATHS["assets"], "template.png")).convert("RGB")
         font_p = os.path.join(PATHS["assets"], "font.ttf")
@@ -192,7 +197,9 @@ def create_pdf_batch(names, zip_path):
         generated_files = []
         temp_zip = zip_path + ".tmp"
         with zipfile.ZipFile(temp_zip, 'w', zipfile.ZIP_DEFLATED) as zipf:
-            for name in names:
+            for i, name in enumerate(names):
+                if i % 10 == 0:
+                    BATCH_PROGRESS[zip_id]["current"] = i
                 # 2. Work entirely in RAM
                 img = base_img.copy()
                 draw = ImageDraw.Draw(img)
@@ -230,9 +237,12 @@ def create_pdf_batch(names, zip_path):
         
         # 生成完毕后重命名，防止前端过早下载到不完整的 ZIP
         os.rename(temp_zip, zip_path)
+        BATCH_PROGRESS[zip_id]["current"] = len(names)
+        BATCH_PROGRESS[zip_id]["status"] = "done"
         return True, len(generated_files)
     except Exception as e:
         print(f"Batch PDF Error: {e}")
+        BATCH_PROGRESS[zip_id]["status"] = "error"
         return False, 0
 
 @app.route('/api/process', methods=['POST'])
@@ -271,14 +281,14 @@ def handle_request():
         zip_path = os.path.join(PATHS["outputs"], zip_filename)
         
         # 启动后台线程执行批量生成, 避免前端 100秒超时断连!
-        thread = threading.Thread(target=create_pdf_batch, args=(names, zip_path), daemon=True)
+        thread = threading.Thread(target=create_pdf_batch, args=(names, zip_path, zip_filename), daemon=True)
         thread.start()
         
         return jsonify({
             "status": "success",
             "score": 100,
-            "file": zip_filename, # 返回 ZIP 文件名供前端下载
-            "message": f"正在后台为您火速生成 {len(names)} 份证书！\n请等待约 1-2 分钟后，再点击下方按钮下载。"
+            "file": zip_filename, # 返回 ZIP 文件名供前端调用 progress 接口
+            "message": f"正在后台为您生成 {len(names)} 份证书"
         })
 
     # ------------------
@@ -310,11 +320,18 @@ def handle_request():
         "message": msg
     })
 
+@app.route('/api/progress/<zip_id>', methods=['GET'])
+def get_progress(zip_id):
+    """获取后台批量生成的进度"""
+    if zip_id in BATCH_PROGRESS:
+        return jsonify(BATCH_PROGRESS[zip_id])
+    return jsonify({"status": "unknown"}), 404
+
 @app.route('/api/download/<filename>', methods=['GET'])
 def download_cert(filename):
-    """供前端下载生成的证书 PDF"""
+    """供前端下载生成的证书 PDF 或 ZIP"""
     if not os.path.exists(os.path.join(PATHS["outputs"], filename)):
-        return "<h1>文件正在后台生成中...</h1><p>请耐心等待 1-2 分钟后刷新此页面重试！ (File is still generating, please wait and refresh later...)</p>", 404
+        return "<h1>文件尚未生成完成</h1><p>请等待进度条达到 100% 后重试。</p>", 404
         
     return send_from_directory(PATHS["outputs"], filename, as_attachment=True)
 
