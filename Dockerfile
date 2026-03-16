@@ -30,4 +30,4 @@ EXPOSE 5001
 
 # The command to run the application using Gunicorn (production WSGI server)
 # It dynamically binds to whatever port the cloud provider assigns, or 5001 by default
-CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:${PORT} yaa_server2:app"]
+CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:${PORT} --timeout 120 yaa_server2:app"]

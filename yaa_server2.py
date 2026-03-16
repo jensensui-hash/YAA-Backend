@@ -180,46 +180,51 @@ def create_pdf(name, sub_id):
         return None
 
 def create_pdf_batch(names, zip_path):
-    """Highly optimized batch PDF generator to avoid Render 100s timeouts"""
+    """Ultra-optimized RAM-based batch PDF generator to beat Render 100s timeout"""
     try:
-        # Pre-load heavy assets into memory ONCE
+        # 1. Pre-load Image and Font to memory ONCE
         base_img = Image.open(os.path.join(PATHS["assets"], "template.png")).convert("RGB")
         font_p = os.path.join(PATHS["assets"], "font.ttf")
+        default_font = ImageFont.truetype(font_p, 85)
+        max_width = base_img.size[0] * 0.75
         
         generated_files = []
         with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
             for name in names:
-                # 1. Image copy in memory is 100x faster than disk IO
+                # 2. Work entirely in RAM
                 img = base_img.copy()
                 draw = ImageDraw.Draw(img)
                 
-                # 2. Font computation
-                fs = 85
-                font = ImageFont.truetype(font_p, fs)
-                while draw.textbbox((0, 0), name, font=font)[2] > img.size[0] * 0.75:
-                    fs -= 5
+                # 3. Cache Font Logic (99% of names fit instantly in default font)
+                w = draw.textbbox((0, 0), name, font=default_font)[2]
+                if w <= max_width:
+                    font = default_font
+                else:
+                    fs = 80
                     font = ImageFont.truetype(font_p, fs)
-                w = draw.textbbox((0, 0), name, font=font)[2]
+                    while draw.textbbox((0, 0), name, font=font)[2] > max_width and fs > 20:
+                        fs -= 5
+                        font = ImageFont.truetype(font_p, fs)
+                    w = draw.textbbox((0, 0), name, font=font)[2]
+                
                 draw.text(((img.size[0]-w)/2, 788), name, fill="black", font=font)
                 
-                # 3. Fast QR logic
+                # 4. Fast QR logic
                 u_id_hex = uuid.uuid4().hex
                 sub_id = f"YAA-{u_id_hex[:5].upper()}"
                 qr = qrcode.make(f"https://cert.auth/v/{sub_id}").resize((180, 180))
                 img.paste(qr, (img.size[0]-250, img.size[1]-250))
                 
-                # 4. Safe Filename (Handles Malaysian A/L and A/P names)
+                # 5. Sanitize Name
                 safe_name = name.replace(' ', '_').replace('/', '_')
                 fname = f"{sub_id}_{safe_name}.pdf"
-                pdf_full_path = os.path.join(PATHS["outputs"], fname)
                 
-                # 5. Save and Zip
-                img.save(pdf_full_path, "PDF")
-                zipf.write(pdf_full_path, arcname=fname)
+                # 6. Save directly to RAM buffer, bypass SSD write perfectly!
+                pdf_bytes = io.BytesIO()
+                img.save(pdf_bytes, format="PDF")
+                zipf.writestr(fname, pdf_bytes.getvalue())
+                
                 generated_files.append(fname)
-                
-                # Optional: clean up file immediately to save disk space on Render
-                os.remove(pdf_full_path)
                 
         return True, len(generated_files)
     except Exception as e:
