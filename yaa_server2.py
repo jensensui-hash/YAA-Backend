@@ -22,8 +22,9 @@ TEXT_KEYS = ["PRELIMINARY", "STAGE", "TEMPLATE", "CATEGORIES", "ALL"]
 def init_tesseract():
     """自动探测并配置 Tesseract 路径"""
     paths = [
-        r'/usr/local/bin/tesseract',
-        r'/opt/homebrew/bin/tesseract',
+        r'/usr/bin/tesseract',            # Standard Debian/Ubuntu Linux path (Docker)
+        r'/usr/local/bin/tesseract',      # Homebrew Mac path
+        r'/opt/homebrew/bin/tesseract',   # Apple Silicon Mac path
         r'C:\Program Files\Tesseract-OCR\tesseract.exe',
         r'C:\Program Files (x86)\Tesseract-OCR\tesseract.exe',
         os.path.join(os.environ.get('LOCALAPPDATA', ''), 'Tesseract-OCR', 'tesseract.exe')
@@ -32,7 +33,13 @@ def init_tesseract():
         if os.path.exists(p):
             pytesseract.pytesseract.tesseract_cmd = p
             return True
-    return False
+    
+    # Fallback to default PATH resolution if not explicitly found in the list
+    try:
+        pytesseract.get_tesseract_version()
+        return True
+    except Exception:
+        return False
 
 HAS_TESSERACT = init_tesseract()
 
