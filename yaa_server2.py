@@ -170,12 +170,61 @@ def create_pdf(name, sub_id):
         draw.text(((img.size[0]-w)/2, 788), name, fill="black", font=font)
         qr = qrcode.make(f"https://cert.auth/v/{sub_id}").resize((180, 180))
         img.paste(qr, (img.size[0]-250, img.size[1]-250))
-        fname = f"{sub_id}_{name.replace(' ', '_')}.pdf"
+        
+        safe_name = name.replace(' ', '_').replace('/', '_')
+        fname = f"{sub_id}_{safe_name}.pdf"
         img.save(os.path.join(PATHS["outputs"], fname), "PDF")
         return fname
     except Exception as e:
         print(f"PDF Error: {e}")
         return None
+
+def create_pdf_batch(names, zip_path):
+    """Highly optimized batch PDF generator to avoid Render 100s timeouts"""
+    try:
+        # Pre-load heavy assets into memory ONCE
+        base_img = Image.open(os.path.join(PATHS["assets"], "template.png")).convert("RGB")
+        font_p = os.path.join(PATHS["assets"], "font.ttf")
+        
+        generated_files = []
+        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            for name in names:
+                # 1. Image copy in memory is 100x faster than disk IO
+                img = base_img.copy()
+                draw = ImageDraw.Draw(img)
+                
+                # 2. Font computation
+                fs = 85
+                font = ImageFont.truetype(font_p, fs)
+                while draw.textbbox((0, 0), name, font=font)[2] > img.size[0] * 0.75:
+                    fs -= 5
+                    font = ImageFont.truetype(font_p, fs)
+                w = draw.textbbox((0, 0), name, font=font)[2]
+                draw.text(((img.size[0]-w)/2, 788), name, fill="black", font=font)
+                
+                # 3. Fast QR logic
+                u_id_hex = uuid.uuid4().hex
+                sub_id = f"YAA-{u_id_hex[:5].upper()}"
+                qr = qrcode.make(f"https://cert.auth/v/{sub_id}").resize((180, 180))
+                img.paste(qr, (img.size[0]-250, img.size[1]-250))
+                
+                # 4. Safe Filename (Handles Malaysian A/L and A/P names)
+                safe_name = name.replace(' ', '_').replace('/', '_')
+                fname = f"{sub_id}_{safe_name}.pdf"
+                pdf_full_path = os.path.join(PATHS["outputs"], fname)
+                
+                # 5. Save and Zip
+                img.save(pdf_full_path, "PDF")
+                zipf.write(pdf_full_path, arcname=fname)
+                generated_files.append(fname)
+                
+                # Optional: clean up file immediately to save disk space on Render
+                os.remove(pdf_full_path)
+                
+        return True, len(generated_files)
+    except Exception as e:
+        print(f"Batch PDF Error: {e}")
+        return False, 0
 
 @app.route('/api/process', methods=['POST'])
 def handle_request():
@@ -208,25 +257,21 @@ def handle_request():
         if not names:
             return jsonify({"status": "fail", "message": "CSV文件为空或格式不正确"})
 
-        # 生成所有证书并打包为 ZIP
+        # 生成所有证书并打包为 ZIP (使用优化版批处理)
         zip_filename = f"Batch_Certs_{uuid.uuid4().hex[:6]}.zip"
         zip_path = os.path.join(PATHS["outputs"], zip_filename)
         
-        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-            for n in names:
-                u_id_hex = uuid.uuid4().hex
-                sub_id = f"YAA-{u_id_hex[:5].upper()}"
-                pdf_name = create_pdf(n, sub_id)
-                if pdf_name:
-                    pdf_full_path = os.path.join(PATHS["outputs"], pdf_name)
-                    zipf.write(pdf_full_path, arcname=pdf_name)
-                    
-        return jsonify({
-            "status": "success",
-            "score": 100,
-            "file": zip_filename, # 返回 ZIP 文件名供前端下载
-            "message": f"成功批量生成 {len(names)} 份证书"
-        })
+        success, count = create_pdf_batch(names, zip_path)
+        
+        if success:
+            return jsonify({
+                "status": "success",
+                "score": 100,
+                "file": zip_filename, # 返回 ZIP 文件名供前端下载
+                "message": f"成功批量生成 {count} 份证书"
+            })
+        else:
+            return jsonify({"status": "fail", "message": "批量生成证书时发生内部错误"})
 
     # ------------------
     # 单个上传处理通道 (Individual or Single School Pass)
