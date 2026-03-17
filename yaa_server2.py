@@ -19,6 +19,7 @@ LOGO_CONFIG = {"h_end": 0.16, "w_start": 0.79}
 LOGO_THRESHOLD = 5
 TEXT_CONFIG = {"h_start": 0.1, "h_end": 0.16, "w_start": 0.79, "w_end": 1.0}
 TEXT_KEYS = ["PRELIMINARY", "STAGE", "TEMPLATE", "CATEGORIES", "ALL"]
+MIN_COLOR_PERCENTAGE = 50 # Fail if less than 50% of the artwork is colored
 
 # ==========================================
 # 1. Tesseract 引擎配置
@@ -112,6 +113,40 @@ def preprocess_for_ocr(img):
     
     return processed
 
+def check_color_percentage(img):
+    """
+    检查画作的色彩比例。转换为 HSV 空间，计算饱和度 (Saturation) > 25 的像素比例。
+    忽略右上角的 Logo 和文本区域，以防干扰。
+    """
+    if img is None or getattr(img, 'size', 0) == 0: return 0.0
+    
+    h, w = img.shape[:2]
+    # 缩小图片以加快计算速度
+    small_img = cv2.resize(img, (w // 4, h // 4))
+    sh, sw = small_img.shape[:2]
+    
+    # 忽略右上角区域 (h_end = 0.16, w_start = 0.79)
+    # 通过创建一个掩膜，将右上角的饱和度强制置为 0
+    ignore_h_end = int(sh * 0.16)
+    ignore_w_start = int(sw * 0.79)
+    
+    hsv = cv2.cvtColor(small_img, cv2.COLOR_BGR2HSV)
+    # S 通道表示色彩饱和度
+    saturation = hsv[:, :, 1]
+    
+    # 将右上角置零
+    saturation[0:ignore_h_end, ignore_w_start:sw] = 0
+    
+    # 计算有效绘画区域的总像素 (图像总像素 - 右上角像素)
+    total_pixels = (sh * sw) - (ignore_h_end * (sw - ignore_w_start))
+    
+    # 大于 25 视为有颜色 (排除纯白、纯黑、铅笔灰)
+    colored_pixels = np.sum(saturation > 25)
+    
+    if total_pixels <= 0: return 0.0
+    percentage = (colored_pixels / total_pixels) * 100
+    return percentage
+
 # ==========================================
 # 3. AI 审计引擎
 # ==========================================
@@ -135,6 +170,19 @@ def run_ai_audit(image_path, name):
             return False, 0, "OCR 引擎未安装"
 
         is_pass = (score_l >= LOGO_THRESHOLD) and (score_t >= 1)
+        
+        # 色彩检测逻辑
+        color_percentage = 0.0
+        if is_pass:
+            color_percentage = check_color_percentage(img)
+            if color_percentage < MIN_COLOR_PERCENTAGE:
+                is_pass = False
+                color_fail = True
+            else:
+                color_fail = False
+        else:
+            color_fail = False
+
         status = "PASS" if is_pass else "FAIL"
         
         # 报告渲染
@@ -142,17 +190,30 @@ def run_ai_audit(image_path, name):
         h_h = 240
         header = np.zeros((h_h, viz.shape[1], 3), dtype=np.uint8)
         ocr_preview = str(ocr_res)[:35].strip().replace('\n', ' ')
-        info = [f"STUDENT: {name}", f"LOGO SCORE: {score_l} (MIN:5)", f"OCR READ: {ocr_preview}", f"AUDIT STATUS: {status}"]
+        info = [
+            f"STUDENT: {name}", 
+            f"LOGO SCORE: {score_l} (MIN:5)", 
+            f"OCR READ: {ocr_preview}", 
+            f"COLOR DENSITY: {color_percentage:.1f}% (MIN:{MIN_COLOR_PERCENTAGE}%)",
+            f"AUDIT STATUS: {status}"
+        ]
+        
         for i, text in enumerate(info):
             color = (255, 255, 255)
             if "PASS" in text: color = (0, 255, 0)
             if "FAIL" in text: color = (0, 0, 255)
-            cv2.putText(header, text, (20, 50 + i*45), cv2.FONT_HERSHEY_SIMPLEX, 0.65, color, 2)
+            cv2.putText(header, text, (20, 35 + i*40), cv2.FONT_HERSHEY_SIMPLEX, 0.65, color, 2)
         
         report = np.vstack((header, viz))
         cv2.imwrite(os.path.join(PATHS["diagnosis"], f"{status}_REPORT_{name}.jpg"), report)
         
-        msg = "审计通过" if is_pass else "审计未通过：校徽或文字匹配失败"
+        if is_pass:
+            msg = "Success"
+        elif color_fail:
+            msg = f"Not enough color: {color_percentage:.1f}% (Minimum {MIN_COLOR_PERCENTAGE}%)"
+        else:
+            msg = "Logo or Text match failed (Ensure photo is clear and A4 proportioned)"
+            
         return bool(is_pass), int(score_l) + int(score_t), str(msg)
     except Exception as e:
         return False, 0, str(e)
