@@ -50,7 +50,7 @@ def init_tesseract():
 HAS_TESSERACT = init_tesseract()
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, expose_headers=["Content-Disposition"])
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PATHS = {
