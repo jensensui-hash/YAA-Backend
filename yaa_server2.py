@@ -426,6 +426,24 @@ def download_cert(filename):
         
     return send_from_directory(PATHS["outputs"], filename, as_attachment=True)
 
+@app.route('/api/admin/database', methods=['GET'])
+def download_database():
+    """Admin Dashboard: Securely download the master database CSV"""
+    # Require a basic token in the Authorization header
+    auth_header = request.headers.get('Authorization')
+    
+    # Hardcoded admin password for simplicity (can be moved to .env later)
+    if not auth_header or auth_header != "Bearer yaa_admin_2026":
+        return jsonify({"status": "fail", "message": "Unauthorized: Invalid admin password"}), 401
+        
+    db_file = "database.csv"
+    db_dir = PATHS["database"]
+    
+    if not os.path.exists(os.path.join(db_dir, db_file)):
+        return jsonify({"status": "fail", "message": "Database file not found yet"}), 404
+        
+    return send_from_directory(db_dir, db_file, as_attachment=True)
+
 if __name__ == '__main__':
     print("\n🚀 YAA 审计服务器已启动 | 对接门户模式 (Fixed)")
     print(f"📂 诊断报告保存至: {PATHS['diagnosis']}")
