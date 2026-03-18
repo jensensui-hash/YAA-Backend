@@ -11,6 +11,7 @@ import csv
 import zipfile
 import io
 import threading
+from datetime import datetime
 
 # ==========================================
 # ROI Configuration
@@ -56,7 +57,8 @@ PATHS = {
     "assets": os.path.join(BASE_DIR, "01_Assets"),
     "inputs": os.path.join(BASE_DIR, "02_Inputs"),
     "outputs": os.path.join(BASE_DIR, "03_Output_Certs"),
-    "diagnosis": os.path.join(BASE_DIR, "06_Diagnosis")
+    "diagnosis": os.path.join(BASE_DIR, "06_Diagnosis"),
+    "database": os.path.join(BASE_DIR, "04_Database")
 }
 
 for p in PATHS.values():
@@ -64,6 +66,20 @@ for p in PATHS.values():
 
 # Global dict to store processing progress (in memory)
 BATCH_PROGRESS = {}
+
+def append_to_database(record):
+    """追加记录到 Master Database CSV"""
+    db_path = os.path.join(PATHS["database"], "database.csv")
+    file_exists = os.path.isfile(db_path)
+    
+    try:
+        with open(db_path, mode='a', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            if not file_exists:
+                writer.writerow(["Timestamp", "Name", "Class", "School", "State", "Category", "Status", "Score", "CertFilename"])
+            writer.writerow(record)
+    except Exception as e:
+        print(f"Database Write Error: {e}")
 
 # ==========================================
 # 2. 核心工具函数
@@ -356,6 +372,13 @@ def handle_request():
     # 单个上传处理通道 (Individual or Single School Pass)
     # ------------------
     name = request.form.get('name', 'UNKNOWN').upper()
+    
+    # New individual data fields
+    class_name = request.form.get('class_name', '')
+    category = request.form.get('category', '')
+    school = request.form.get('school', '')
+    state = request.form.get('state', '')
+    
     u_id_hex = uuid.uuid4().hex
     t_path = os.path.join(PATHS["inputs"], f"up_{u_id_hex[:6]}.jpg")
     if file: 
@@ -373,6 +396,13 @@ def handle_request():
         u_id_hex = uuid.uuid4().hex
         sub_id = f"YAA-{u_id_hex[:5].upper()}"
         pdf_filename = create_pdf(name, sub_id)
+        
+    # Log to Database if Individual
+    if channel == "Individual":
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        status_str = "PASS" if passed else "FAIL"
+        record = [timestamp, name, class_name, school, state, category, status_str, score, pdf_filename or "N/A"]
+        append_to_database(record)
     
     return jsonify({
         "status": "success" if passed else "fail",
