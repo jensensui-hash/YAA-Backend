@@ -76,7 +76,7 @@ def append_to_database(record):
         with open(db_path, mode='a', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
             if not file_exists:
-                writer.writerow(["Timestamp", "Name", "Class", "School", "State", "Category", "Status", "Score", "CertFilename"])
+                writer.writerow(["Timestamp", "Name", "Class", "School", "State", "Category", "Status", "Score", "CertFilename", "ArtworkURL"])
             writer.writerow(record)
     except Exception as e:
         print(f"Database Write Error: {e}")
@@ -401,7 +401,13 @@ def handle_request():
     if channel == "Individual":
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         status_str = "PASS" if passed else "FAIL"
-        record = [timestamp, name, class_name, school, state, category, status_str, score, pdf_filename or "N/A"]
+        
+        # Generate the dynamic public URL for the artwork
+        base_filename = os.path.basename(t_path)
+        # request.host_url automatically pulls the correct base domain (e.g. localhost or render)
+        artwork_url = f"{request.host_url}api/artwork/{base_filename}"
+        
+        record = [timestamp, name, class_name, school, state, category, status_str, score, pdf_filename or "N/A", artwork_url]
         append_to_database(record)
     
     return jsonify({
@@ -425,6 +431,14 @@ def download_cert(filename):
         return "<h1>文件尚未生成完成</h1><p>请等待进度条达到 100% 后重试。</p>", 404
         
     return send_from_directory(PATHS["outputs"], filename, as_attachment=True)
+
+@app.route('/api/artwork/<filename>', methods=['GET'])
+def get_artwork(filename):
+    """Serve the original uploaded cropped artwork for viewing via CSV link"""
+    if not os.path.exists(os.path.join(PATHS["inputs"], filename)):
+        return "<h1>Artwork Not Found</h1><p>The requested image does not exist.</p>", 404
+        
+    return send_from_directory(PATHS["inputs"], filename)
 
 @app.route('/api/admin/database', methods=['GET'])
 def download_database():
