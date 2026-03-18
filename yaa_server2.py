@@ -407,7 +407,15 @@ def handle_request():
             csv_input = csv.reader(stream)
             
             for row in csv_input:
-                # 学校模板有很多行说明文字。真实数据行的特点是：第一列(BIL)是纯数字，第二列(NAMA)是名字。
+                # 1. Universally scan EVERY cell in the row for the teacher's email!
+                # Since it might be in Row 9 or an arbitrary header column
+                if not teacher_email:
+                    for cell in row:
+                        if "@" in cell and "." in cell:
+                            teacher_email = cell.strip()
+                            break
+                            
+                # 2. Extract the actual student names
                 if len(row) > 1:
                     bil = row[0].strip()
                     if bil.isdigit():
@@ -415,12 +423,6 @@ def handle_request():
                         # 跳过模板里的例子 "NAMA MURID ANDA DALAM UPPERCASE"
                         if student_name and "NAMA MURID ANDA" not in student_name:
                             names.append(student_name)
-                            
-                        # Extract teacher email from column 9 (index 8) if available
-                        if len(row) >= 9 and not teacher_email:
-                            email_str = row[8].strip()
-                            if "@" in email_str:
-                                teacher_email = email_str
         except Exception as e:
             return jsonify({"status": "fail", "message": f"CSV读取失败: {str(e)}"})
 
