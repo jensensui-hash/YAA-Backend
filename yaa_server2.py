@@ -12,6 +12,9 @@ import zipfile
 import io
 import threading
 from datetime import datetime
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 
 # ==========================================
 # ROI Configuration
@@ -272,7 +275,53 @@ def create_pdf(name, sub_id):
         print(f"PDF Error: {e}")
         return None
 
-def create_pdf_batch(names, zip_path, zip_id):
+def send_batch_email(recipient_email, zip_filename, zip_url):
+    """Send an automated email to the teacher with the ZIP download link."""
+    sender_email = os.environ.get("SMTP_USER")
+    sender_pass = os.environ.get("SMTP_PASS")
+    
+    if not sender_email or not sender_pass:
+        print("SMTP Credentials missing. Skipping email to:", recipient_email)
+        return False
+        
+    try:
+        msg = MIMEMultipart()
+        msg['From'] = f"YAA Admin <{sender_email}>"
+        msg['To'] = recipient_email
+        msg['Subject'] = "Your YAA Batch Certificates are Ready!"
+        
+        body = f"""
+        <html>
+          <body style="font-family: Arial, sans-serif; color: #333; line-height: 1.6;">
+            <div style="max-w-md margin: 0 auto; padding: 20px; border: 1px solid #eee; border-radius: 10px;">
+                <h2 style="color: #dc2626;">Congratulations!</h2>
+                <p>Your batch of YAA certificates has been successfully generated.</p>
+                <p>You can securely download all of the student certificates in a single ZIP file by clicking the link below:</p>
+                <br>
+                <p style="text-align: center;">
+                    <a href="{zip_url}" style="display:inline-block; padding:12px 24px; background-color:#dc2626; color:white; text-decoration:none; border-radius:8px; font-weight:bold;">Download Batch Certificates</a>
+                </p>
+                <br>
+                <p><small style="color: #666;">Filename: {zip_filename}</small></p>
+                <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;">
+                <p style="font-size: 12px; color: #999;">If this automated email was sent by mistake, please ignore it.</p>
+            </div>
+          </body>
+        </html>
+        """
+        msg.attach(MIMEText(body, 'html'))
+        
+        server = smtplib.SMTP_SSL("smtp.gmail.com", 465)
+        server.login(sender_email, sender_pass)
+        server.send_message(msg)
+        server.quit()
+        print(f"Successfully sent batch email to {recipient_email}")
+        return True
+    except Exception as e:
+        print(f"Failed to send email to {recipient_email}: {e}")
+        return False
+
+def create_pdf_batch(names, zip_path, zip_id, teacher_email=None, host_url=None):
     """Ultra-optimized RAM-based batch PDF generator to beat Render 100s timeout"""
     try:
         BATCH_PROGRESS[zip_id] = {"current": 0, "total": len(names), "status": "processing"}
@@ -328,6 +377,12 @@ def create_pdf_batch(names, zip_path, zip_id):
         os.rename(temp_zip, zip_path)
         BATCH_PROGRESS[zip_id]["current"] = len(names)
         BATCH_PROGRESS[zip_id]["status"] = "done"
+        
+        # Notify the teacher instantly via email
+        if teacher_email and host_url:
+            zip_url = f"{host_url}api/download/{zip_id}"
+            send_batch_email(teacher_email, zip_id, zip_url)
+            
         return True, len(generated_files)
     except Exception as e:
         print(f"Batch PDF Error: {e}")
@@ -345,6 +400,7 @@ def handle_request():
     # ------------------
     if channel == "School" and file and file.filename.endswith('.csv'):
         names = []
+        teacher_email = None
         try:
             # 读取 CSV 内容
             stream = io.StringIO(file.stream.read().decode("UTF8"), newline=None)
@@ -359,6 +415,12 @@ def handle_request():
                         # 跳过模板里的例子 "NAMA MURID ANDA DALAM UPPERCASE"
                         if student_name and "NAMA MURID ANDA" not in student_name:
                             names.append(student_name)
+                            
+                        # Extract teacher email from column 9 (index 8) if available
+                        if len(row) >= 9 and not teacher_email:
+                            email_str = row[8].strip()
+                            if "@" in email_str:
+                                teacher_email = email_str
         except Exception as e:
             return jsonify({"status": "fail", "message": f"CSV读取失败: {str(e)}"})
 
@@ -370,7 +432,8 @@ def handle_request():
         zip_path = os.path.join(PATHS["outputs"], zip_filename)
         
         # 启动后台线程执行批量生成, 避免前端 100秒超时断连!
-        thread = threading.Thread(target=create_pdf_batch, args=(names, zip_path, zip_filename), daemon=True)
+        host_url = request.host_url
+        thread = threading.Thread(target=create_pdf_batch, args=(names, zip_path, zip_filename, teacher_email, host_url), daemon=True)
         thread.start()
         
         return jsonify({
