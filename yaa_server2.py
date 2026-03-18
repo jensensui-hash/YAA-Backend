@@ -81,6 +81,18 @@ def append_to_database(record):
     except Exception as e:
         print(f"Database Write Error: {e}")
 
+def get_next_row_id():
+    """获取下一个可用的数据库行号"""
+    db_path = os.path.join(PATHS["database"], "database.csv")
+    if not os.path.isfile(db_path):
+        return 1
+    try:
+        with open(db_path, 'r', encoding='utf-8') as f:
+            count = sum(1 for line in f if line.strip())
+        return count if count > 0 else 1
+    except Exception:
+        return 1
+
 # ==========================================
 # 2. 核心工具函数
 # ==========================================
@@ -402,10 +414,18 @@ def handle_request():
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         status_str = "PASS" if passed else "FAIL"
         
-        # Generate the dynamic public URL for the artwork
-        base_filename = os.path.basename(t_path)
-        # request.host_url automatically pulls the correct base domain (e.g. localhost or render)
-        artwork_url = f"{request.host_url}api/artwork/{base_filename}"
+        # Generate the new filename with row ID and safe name
+        row_id = get_next_row_id()
+        safe_name_for_file = name.replace(' ', '_').replace('/', '_')
+        new_filename = f"{row_id:03d}_{safe_name_for_file}.jpg"
+        new_path = os.path.join(PATHS["inputs"], new_filename)
+        
+        # Rename the original uploaded file to the new permanent name
+        if os.path.exists(t_path):
+            os.rename(t_path, new_path)
+        
+        # Generate the dynamic public URL for the newly renamed artwork
+        artwork_url = f"{request.host_url}api/artwork/{new_filename}"
         
         record = [timestamp, name, class_name, school, state, category, status_str, score, pdf_filename or "N/A", artwork_url]
         append_to_database(record)
