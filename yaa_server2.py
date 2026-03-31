@@ -252,7 +252,7 @@ def run_ai_audit(image_path, name):
 # ==========================================
 # 4. 证书生成与路由
 # ==========================================
-def create_pdf(name, sub_id):
+def create_pdf(name, sub_id, school_name=""):
     try:
         img = Image.open(os.path.join(PATHS["assets"], "template.png")).convert("RGB")
         draw = ImageDraw.Draw(img)
@@ -263,7 +263,18 @@ def create_pdf(name, sub_id):
             fs -= 5
             font = ImageFont.truetype(font_p, fs)
         w = draw.textbbox((0, 0), name, font=font)[2]
-        draw.text(((img.size[0]-w)/2, 788), name, fill="black", font=font)
+        draw.text(((img.size[0]-w)/2, 1300), name, fill="black", font=font)
+        
+        # Add school name below student name
+        if school_name:
+            fs_school = 60
+            font_school = ImageFont.truetype(font_p, fs_school)
+            while draw.textbbox((0, 0), school_name, font_school)[2] > img.size[0] * 0.75:
+                fs_school -= 5
+                font_school = ImageFont.truetype(font_p, fs_school)
+            w_school = draw.textbbox((0, 0), school_name, font_school)[2]
+            draw.text(((img.size[0]-w_school)/2, 1600), school_name, fill="black", font=font_school)
+            
         qr = qrcode.make(f"https://cert.auth/v/{sub_id}").resize((180, 180))
         img.paste(qr, (img.size[0]-250, img.size[1]-250))
         
@@ -321,7 +332,7 @@ def send_batch_email(recipient_email, zip_filename, zip_url):
         print(f"Failed to send email to {recipient_email}: {e}")
         return False
 
-def create_pdf_batch(names, zip_path, zip_id, teacher_email=None, host_url=None):
+def create_pdf_batch(names, zip_path, zip_id, teacher_email=None, host_url=None, school_name=""):
     """Ultra-optimized RAM-based batch PDF generator to beat Render 100s timeout"""
     try:
         BATCH_PROGRESS[zip_id] = {"current": 0, "total": len(names), "status": "processing"}
@@ -354,7 +365,17 @@ def create_pdf_batch(names, zip_path, zip_id, teacher_email=None, host_url=None)
                         font = ImageFont.truetype(font_p, fs)
                     w = draw.textbbox((0, 0), name, font=font)[2]
                 
-                draw.text(((img.size[0]-w)/2, 788), name, fill="black", font=font)
+                draw.text(((img.size[0]-w)/2, 1300), name, fill="black", font=font)
+                
+                # Add school name below student name
+                if school_name:
+                    fs_school = 60
+                    font_school = ImageFont.truetype(font_p, fs_school)
+                    while draw.textbbox((0, 0), school_name, font=font_school)[2] > max_width:
+                        fs_school -= 5
+                        font_school = ImageFont.truetype(font_p, fs_school)
+                    w_school = draw.textbbox((0, 0), school_name, font=font_school)[2]
+                    draw.text(((img.size[0]-w_school)/2, 1600), school_name, fill="black", font=font_school)
                 
                 # 4. Fast QR logic
                 u_id_hex = uuid.uuid4().hex
@@ -394,6 +415,7 @@ def handle_request():
     """主接口：处理前端发送的姓名(或CSV)、频道和作品照片"""
     channel = request.form.get('channel', 'Individual')
     file = request.files.get('artwork')
+    school_name = request.form.get('school', '').strip().upper()
     
     # ------------------
     # 批量上传处理通道 (School + CSV)
@@ -435,7 +457,7 @@ def handle_request():
         
         # 启动后台线程执行批量生成, 避免前端 100秒超时断连!
         host_url = request.host_url
-        thread = threading.Thread(target=create_pdf_batch, args=(names, zip_path, zip_filename, teacher_email, host_url), daemon=True)
+        thread = threading.Thread(target=create_pdf_batch, args=(names, zip_path, zip_filename, teacher_email, host_url, school_name), daemon=True)
         thread.start()
         
         return jsonify({
@@ -472,7 +494,7 @@ def handle_request():
     if passed:
         u_id_hex = uuid.uuid4().hex
         sub_id = f"YAA-{u_id_hex[:5].upper()}"
-        pdf_filename = create_pdf(name, sub_id)
+        pdf_filename = create_pdf(name, sub_id, school_name)
         
     # Log to Database if Individual
     if channel == "Individual":
